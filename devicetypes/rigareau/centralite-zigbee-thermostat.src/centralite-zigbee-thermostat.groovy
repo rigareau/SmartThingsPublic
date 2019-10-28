@@ -306,11 +306,33 @@ def ping() {
 }
 
 def configure() {
-	def binding = zigbee.addBinding(THERMOSTAT_CLUSTER) + zigbee.addBinding(FAN_CONTROL_CLUSTER)
-	def startValues = zigbee.writeAttribute(THERMOSTAT_CLUSTER, HEATING_SETPOINT, DataType.INT16, 0x07D0) +
-			zigbee.writeAttribute(THERMOSTAT_CLUSTER, COOLING_SETPOINT, DataType.INT16, 0x0A28)
+	def requests = []
+	log.debug "binding to Thermostat cluster and Fan Cluster"
+    
+	requests += zigbee.addBinding(THERMOSTAT_CLUSTER) + zigbee.addBinding(FAN_CONTROL_CLUSTER)
 
-	return binding + startValues + zigbee.batteryConfig() + refresh()
+// Configure Thermostat Cluster
+	requests += zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_LOCAL_TEMP, DataType.INT16, 10, 60, 50)
+	requests += zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_HEAT_SETPOINT, DataType.INT16, 1, 600, 50)
+	requests += zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE, DataType.ENUM8, 1, 0, 1)
+	//requests += zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_MFR_SPEC_SETPOINT_MODE, DataType.ENUM8, 1, 0, 1)
+	//requests += zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_PI_HEATING_STATE, DataType.UINT8, 1, 600, 1)
+
+	// Configure Thermostat Ui Conf Cluster
+	//requests += zigbee.configureReporting(THERMOSTAT_UI_CONFIG_CLUSTER, ATTRIBUTE_TEMP_DISP_MODE, DataType.ENUM8, 1, 0, 1)
+	//requests += zigbee.configureReporting(THERMOSTAT_UI_CONFIG_CLUSTER, ATTRIBUTE_KEYPAD_LOCKOUT, DataType.ENUM8, 1, 0, 1)
+
+	// Read the configured variables
+	requests += zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_LOCAL_TEMP)
+	requests += zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEAT_SETPOINT)
+	requests += zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE)
+	//requests += zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_MFR_SPEC_SETPOINT_MODE, ["mfgCode": "0x1185"])
+	//requests += zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_PI_HEATING_STATE)
+	//requests += zigbee.readAttribute(THERMOSTAT_UI_CONFIG_CLUSTER, ATTRIBUTE_TEMP_DISP_MODE)
+	//requests += zigbee.readAttribute(THERMOSTAT_UI_CONFIG_CLUSTER, ATTRIBUTE_KEYPAD_LOCKOUT)
+
+
+	return requests
 }
 
 def getBatteryPercentage(rawValue) {
