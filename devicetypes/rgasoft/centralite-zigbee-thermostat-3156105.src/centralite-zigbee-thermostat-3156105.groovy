@@ -12,6 +12,9 @@
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
  */
+ 
+import physicalgraph.zigbee.zcl.DataType
+
 metadata {
 	definition (name: "Centralite Zigbee Thermostat 3156105", namespace: "RGASoft", author: "Richard Gareau", cstHandler: true) {
 		capability "Temperature Measurement"
@@ -30,6 +33,13 @@ metadata {
 
 	simulator {
 		// TODO: define status and reply messages here
+        log.debug "Simulator method called"
+        
+        status "heat":  "read attr -"
+		status "off": "command: 2003, payload: 00"
+        
+        reply "0x201": "command: 2503, payload: FF"
+		reply "200100,delay 100,2502": "command: 2503, payload: 00"
 	}
 
 	tiles {
@@ -88,6 +98,14 @@ metadata {
 					[value: 96, color: "#bc2323"]
 				]
 		}
+        
+        standardTile("mode", "device.thermostatMode", width: 2, height: 2) {
+        	state "heat", label:'${name}', action:"heat", nextState:"cool", icon:"st.Outdoor.outdoor3"
+            state "cool", label:'${name}', action:"cool", nextState:"auto", icon:"st.Outdoor.outdoor3"
+			state "auto", label:'${name}', action:"auto", nextState:"off", icon:"st.Outdoor.outdoor3"
+            state "off", label:'${name}', action:"off", nextState:"heat", icon:"st.Home.home29"
+		}
+        
         standardTile("refresh", "device.refresh", decoration: "flat", width: 2, height: 2) {
 			state "default", action:"refresh.refresh", icon:"st.secondary.refresh"
 		}
@@ -103,9 +121,26 @@ metadata {
 // parse events into attributes
 def parse(String description) {
 	log.debug "Parsing --- Start"
-	
     log.debug "parse got called with '${description}'"
     
+    if (description?.startsWith("read attr -")) {
+		def descMap = zigbee.parseDescriptionAsMap(description)
+		log.debug "Desc Map: $descMap"
+		if (descMap.clusterInt == THERMOSTAT_CLUSTER) {
+    		if (descMap.attrInt == ATTRIBUTE_SYSTEM_MODE) {
+				log.debug "MODE - ${descMap.value}"
+				def value = modeMap[descMap.value]
+
+				// If we receive an off here then we are off
+				// Else we will determine the real mode in the mfg specific packet so store this
+				if (value == "off") {
+					map.name = "thermostatMode"
+					map.value = value
+					map.data = [supportedThermostatModes: supportedThermostatModes]
+				}
+            }
+        }
+    }
     // TODO: handle 'temperature' attribute
     
 	// TODO: handle 'heatingSetpoint' attribute
@@ -117,7 +152,19 @@ def parse(String description) {
 /*** Thermostat Heating Setpoint ***/
 def setHeatingSetpoint(Double degree) {
 	log.debug "setHeatingSetpoint --- Start"
-    log.debug "Setting heat set point to " + degree
+    
+    if (degrees != null) {
+		def temperatureScale = getTemperatureScale()
+
+		def degreesInteger = Math.round(degree)
+		log.debug "setHeatingSetpoint({$degreesInteger} ${temperatureScale})"
+		sendEvent("name": "heatingSetpoint", "value": degreesInteger, "unit": temperatureScale)
+
+		def celsius = (getTemperatureScale() == "C") ? degreesInteger : (fahrenheitToCelsius(degreesInteger) as Double).round(2)
+		"st wattr 0x${device.deviceNetworkId} 1 0x201 0x12 0x29 {" + hex(celsius * 100) + "}"
+	}
+    
+    
     if (degree != null) {
 		def temperatureScale = getTemperatureScale()
 		float minSetpoint = thermostatSetpointRange[minSetpointIndex]
@@ -181,11 +228,11 @@ def setThermostatFanMode(String mode){
 /*** Capability Thermostat Fan Mode ***/
 
 /*** Capability Thermostat Mode ***/
-def auto()
+def heat()
 {
-	log.debug "auto --- Start"
-    setThermostatMode("auto")
-    log.debug "auto --- Done"
+	log.debug "heat --- Start"
+    setThermostatMode("heat")
+    log.debug "heat --- Done"
 }
 
 def cool()
@@ -202,11 +249,11 @@ def emergencyHeat()
     log.debug "emergencyHeat --- Done"
 }
 
-def heat()
+def auto()
 {
-	log.debug "heat --- Start"
-    setThermostatMode("heat")
-    log.debug "heat --- Done"
+	log.debug "auto --- Start"
+    setThermostatMode("auto")
+    log.debug "auto --- Done"
 }
 
 def off()
@@ -220,6 +267,39 @@ def setThermostatMode(String mode)
 {
 	log.debug "setThermostatMode --- Start"
     log.debug "setThermostatMode '${mode}'"
+    
+    if (supportedThermostatModes.contains(mode)) {
+    	def currentMode = device.currentState("thermostatMode")?.value
+		int modeNumber;
+        
+        switch(mode) {
+            case "heat":
+                log.debug "heat mode"
+				modeNumber = 04
+                break
+            case "cool":
+                log.debug "cool mode"
+                modeNumber = 03
+                break
+            case "auto":
+                log.debug "auto mode"
+                modeNumber = 01
+                break
+            case "off":
+                log.debug "off mode"
+				modeNumber = 00
+                break
+        }
+        log.debug "Thermostat cluster:" + THERMOSTAT_CLUSTER + " System mode:" + ATTRIBUTE_SYSTEM_MODE + " mode:" + modeNumber + " DataType:" + DataType.UINT16
+        try {
+        	zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE, DataType.ENUM8, modeNumber)
+        } catch(IllegalArgumentException ex) {
+        	log.error "Unexpected error" + ex.toString()
+        }
+        
+    } else {
+    	log.debug "'${mode}' is not supported"
+    }    
     log.debug "setThermostatMode --- Done"
 }
 /*** Capability Thermostat Mode ***/
@@ -249,3 +329,14 @@ def ping() {
     log.debug "ping --- Done"
 }
 /*** Capability Health ***/
+
+
+def getSupportedThermostatModes() {
+	["heat", "cool", "auto", "off"]
+}
+
+def getTHERMOSTAT_CLUSTER() { 0x0201 }
+def getATTRIBUTE_LOCAL_TEMP() { 0x0000 }
+def getATTRIBUTE_PI_HEATING_STATE() { 0x0008 }
+def getATTRIBUTE_HEAT_SETPOINT() { 0x0012 }
+def getATTRIBUTE_SYSTEM_MODE() { 0x001C }
