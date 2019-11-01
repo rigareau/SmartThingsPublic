@@ -101,11 +101,23 @@ metadata {
 				]
 		}
         
+        controlTile("thermostatFanMode", "device.thermostatFanMode", "enum", width: 2 , height: 2, supportedStates: "device.supportedThermostatFanModes") {
+			state "auto", action: "setThermostatFanMode", label: 'Auto', icon: "st.thermostat.fan-auto"
+			state "on",	action: "setThermostatFanMode", label: 'On', icon: "st.thermostat.fan-on"
+		}
+        
         standardTile("thermostatmode", "device.thermostatMode", inactiveLabel: false, decoration: "flat") {
 			state "off", label: "off", action:"thermostat.off", icon:"st.thermostat.heating-cooling-off"
 			state "cool", label: "cool", action:"thermostat.cool", icon:"st.thermostat.cool"
 			state "heat", label: "heat", action:"thermostat.heat", icon:"st.thermostat.heat"
 			state "auto", label: "auto", action:"thermostat.auto", icon:"st.thermostat.auto"
+		}
+        
+        standardTile("thermostatOperatingState", "device.thermostatOperatingState", inactiveLabel: false, decoration: "flat") {
+			state "idle", label: "Idle", icon:"st.thermostat.heating-cooling-off"
+			state "cooling", label: "Cooling", icon:"st.thermostat.cool"
+			state "heating", label: "Heating", icon:"st.thermostat.heat"
+			state "fan only", label: "Fan Only", icon:"st.thermostat.auto"
 		}
         
         standardTile("refresh", "device.refresh", decoration: "flat", width: 2, height: 2) {
@@ -131,19 +143,71 @@ def parse(String description) {
     log.debug "Desc Map: $descMap"
     if (descMap.clusterInt == THERMOSTAT_CLUSTER) {
         log.debug "We are in Thermostat Cluster"
+		if (descMap.attrInt == ATTRIBUTE_LOCAL_TEMPERATURE) {
+        	log.debug "TEMP"
+			map.name = "temperature"
+			map.value = getTemperature(descMap.value)
+			map.unit = getTemperatureScale()
+        }
 
         if (descMap.attrInt == ATTRIBUTE_SYSTEM_MODE) {
             log.debug "MODE - ${descMap.value}"
             def value = modeMap[descMap.value]
-            log.debug "value: " + value
             map.name = "thermostatMode"
             map.value = value
         }
+        
+        if (descMap.attrInt == ATTRIBUTE_COOLING_SETPOINT) {
+            log.debug "COOLING SETPOINT"
+			map.name = "coolingSetpoint"
+			map.value = getTemperature(descMap.value)
+			map.unit = getTemperatureScale()
+        }
+        
+        if (descMap.attrInt == ATTRIBUTE_HEATING_SETPOINT) {
+            log.debug "HEATING SETPOINT"
+			map.name = "heatingSetpoint"
+			map.value = getTemperature(descMap.value)
+			map.unit = getTemperatureScale()
+        }
+        
+        if (descMap.attrInt == ATTRIBUTE_RUNNING_STATE) {
+        	log.debug "RUNNING STATE"
+            def intValue = zigbee.convertHexToInt(descMap.value)
+            /**
+			 * Zigbee Cluster Library spec 6.3.2.2.3.7
+			 * Bit	Description
+			 *  0	Heat State
+			 *  1	Cool State
+			 *  2	Fan State
+			 *  3	Heat 2nd Stage State
+			 *  4	Cool 2nd Stage State
+			 *  5	Fan 2nd Stage State
+			 *  6	Fan 3rd Stage Stage
+			 **/
+            map.name = "thermostatOperatingState"
+            if (intValue & 0x01) {
+                map.value = "heating"
+            } else if (intValue & 0x02) {
+                map.value = "cooling"
+            } else if (intValue & 0x04) {
+                map.value = "fan only"
+            } else {
+                map.value = "idle"
+            }
+        }
     }
-    // TODO: handle 'temperature' attribute
-    
-	// TODO: handle 'heatingSetpoint' attribute
 	
+    if (descMap.clusterInt == FAN_CONTROL_CLUSTER) {
+        log.debug "Fan Control Cluster"
+		if (descMap.attrInt == ATTRIBUTE_FAN_MODE) {
+        	log.debug "FAN MODE"
+			map.name = "thermostatFanMode"
+			map.value = ATTRIBUTE_FAN_MODE_MAP[descMap.value]
+			map.data = [supportedThermostatFanModes: state.supportedFanModes]
+        }
+    }
+    
     def result = null
 	if (map) {
 		result = createEvent(map)
@@ -235,7 +299,7 @@ def setThermostatFanMode(String mode){
 def heat()
 {
 	log.debug "heat --- Start"
-    setThermostatMode("heat")
+    //setThermostatMode("heat")
     log.debug "heat --- Done"
 }
 
@@ -269,47 +333,33 @@ def off()
 
 def setThermostatMode(String mode)
 {
-	log.debug "setThermostatMode --- Start"
-    log.debug "setThermostatMode: ${mode}"
-    
+	log.debug "setThermostatMode --- Start ${mode}"
+    def retval = ""
     if (supportedThermostatModes.contains(mode)) {
-    	def currentMode = device.currentState("thermostatMode")?.value
-        log.debug "Current thermostat mode:" + currentMode
 		int modeNumber;
-        
         switch(mode) {
             case "heat":
-                log.debug "heat mode"
 				modeNumber = 04
                 break
             case "cool":
-                log.debug "cool mode"
                 modeNumber = 03
                 break
             case "auto":
-                log.debug "auto mode"
                 modeNumber = 01
                 break
             case "off":
-                log.debug "off mode"
 				modeNumber = 00
                 break
         }
         
-        try {
-        	log.debug "Writing attribute:" + THERMOSTAT_CLUSTER + " System mode:" + ATTRIBUTE_SYSTEM_MODE + " mode:" + modeNumber + " DataType:" + DataType.UINT16
-        	zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE, DataType.ENUM8, modeNumber)
-            
-            log.debug "Sending event"
-            sendEvent(name:"thermostatMode",value:"${mode}")
-        } catch(IllegalArgumentException ex) {
-        	log.error "Unexpected error" + ex
-        }
+        sendEvent(name:"thermostatMode",value:"${mode}")
+       	retval = zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE, DataType.ENUM8, modeNumber)
         
     } else {
     	log.debug "'${mode}' is not supported"
     }    
-    log.debug "setThermostatMode --- Done"
+    log.debug "setThermostatMode --- return $retVal"
+    return retval
 }
 /*** Capability Thermostat Mode ***/
 
@@ -317,17 +367,29 @@ def setThermostatMode(String mode)
 /*** Capability Refresh ***/
 def refresh()
 {
-	log.debug "refresh --- Start"
-
-	log.debug "refresh --- Done"
+	log.debug "refresh"
+    return zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_LOCAL_TEMPERATURE) +
+		zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_COOLING_SETPOINT) +
+		zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT) +
+		zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE) +
+        zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_RUNNING_STATE) +
+        zigbee.readAttribute(FAN_CONTROL_CLUSTER, ATTRIBUTE_FAN_MODE)
 }
 /*** Capability Refresh ***/
 
 /*** Capability Configure ***/
 def configure() {
 	log.debug "configure --- Start"
-
-	log.debug "configure --- Done"
+    def bindings = zigbee.addBinding(THERMOSTAT_CLUSTER) +
+    	zigbee.addBinding(FAN_CONTROL_CLUSTER)
+	def startValues = zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT, DataType.INT16, 0x07D0) +
+		zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_COOLING_SETPOINT, DataType.INT16, 0x0A28)
+    
+    
+    log.debug "bindings: ${bindings}"
+    log.debug "startvalues: ${startValues}"
+	log.debug "configure --- done"
+    return bindings + startValues + refresh()
 }
 /*** Capability Configure ***/
 
@@ -338,6 +400,17 @@ def ping() {
     log.debug "ping --- Done"
 }
 /*** Capability Health ***/
+
+def getTemperature(value) {
+	if (value != null) {
+		def celsius = Integer.parseInt(value, 16) / 100
+		if (getTemperatureScale() == "C") {
+			return celsius
+		} else {
+			return celsiusToFahrenheit(celsius)
+		}
+	}
+}
 
 
 def getSupportedThermostatModes() {
@@ -351,8 +424,18 @@ def getModeMap() {[
 	"04":"heat"
 ]}
 
-def getTHERMOSTAT_CLUSTER() { 0x0201 }
-def getATTRIBUTE_LOCAL_TEMP() { 0x0000 }
-def getATTRIBUTE_PI_HEATING_STATE() { 0x0008 }
-def getATTRIBUTE_HEAT_SETPOINT() { 0x0012 }
-def getATTRIBUTE_SYSTEM_MODE() { 0x001C }
+private getTHERMOSTAT_CLUSTER() { 0x0201 }
+private getATTRIBUTE_LOCAL_TEMPERATURE() { 0x0000 }
+private getATTRIBUTE_COOLING_SETPOINT() { 0x0011 }
+private getATTRIBUTE_HEATING_SETPOINT() { 0x0012 }
+private getATTRIBUTE_SYSTEM_MODE() { 0x001C }
+private getATTRIBUTE_RUNNING_STATE() { 0x0029 }
+
+private getFAN_CONTROL_CLUSTER() { 0x0202 }
+private getATTRIBUTE_FAN_MODE() { 0x0000 }
+private getATTRIBUTE_FAN_MODE_MAP() {
+	[
+		"04":"on",
+		"05":"auto"
+	]
+}
