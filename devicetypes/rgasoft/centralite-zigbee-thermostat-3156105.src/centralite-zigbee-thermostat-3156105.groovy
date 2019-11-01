@@ -35,11 +35,13 @@ metadata {
 		// TODO: define status and reply messages here
         log.debug "Simulator method called"
         
-        status "heat":  "read attr -"
-		status "off": "command: 2003, payload: 00"
+        status "system mode off":  "read attr - raw: 7AF81902010A0000293408, dni: 7AF8, endpoint: 19, cluster: 0201, size: 10, attrId: 001C, encoding: 20, value: 00"
+        status "system mode auto": "read attr - raw: 7AF81902010A0000293408, dni: 7AF8, endpoint: 19, cluster: 0201, size: 10, attrId: 001C, encoding: 20, value: 01"
+        status "system mode cool": "read attr - raw: 7AF81902010A0000293408, dni: 7AF8, endpoint: 19, cluster: 0201, size: 10, attrId: 001C, encoding: 20, value: 03"
+        status "system mode heat": "read attr - raw: 7AF81902010A0000293408, dni: 7AF8, endpoint: 19, cluster: 0201, size: 10, attrId: 001C, encoding: 20, value: 04"
+		status "catchall": "catchall: 0104 0201 01 01 0000 00 A6BA 01 01 106A 22 01 00000101"
         
-        reply "0x201": "command: 2503, payload: FF"
-		reply "200100,delay 100,2502": "command: 2503, payload: 00"
+        reply "system mode off": "catchall: 0104 0201 01 01 0000 00 A6BA 01 01 106A 22 01 01000000"
 	}
 
 	tiles {
@@ -99,11 +101,11 @@ metadata {
 				]
 		}
         
-        standardTile("mode", "device.thermostatMode", width: 2, height: 2) {
-        	state "heat", label:'${name}', action:"heat", nextState:"cool", icon:"st.Outdoor.outdoor3"
-            state "cool", label:'${name}', action:"cool", nextState:"auto", icon:"st.Outdoor.outdoor3"
-			state "auto", label:'${name}', action:"auto", nextState:"off", icon:"st.Outdoor.outdoor3"
-            state "off", label:'${name}', action:"off", nextState:"heat", icon:"st.Home.home29"
+        standardTile("thermostatmode", "device.thermostatMode", inactiveLabel: false, decoration: "flat") {
+			state "off", label: "off", action:"thermostat.off", icon:"st.thermostat.heating-cooling-off"
+			state "cool", label: "cool", action:"thermostat.cool", icon:"st.thermostat.cool"
+			state "heat", label: "heat", action:"thermostat.heat", icon:"st.thermostat.heat"
+			state "auto", label: "auto", action:"thermostat.auto", icon:"st.thermostat.auto"
 		}
         
         standardTile("refresh", "device.refresh", decoration: "flat", width: 2, height: 2) {
@@ -115,7 +117,7 @@ metadata {
 	}
     
     main("temperature")
-    details(["temperature", "heatingSetpoint", "coolingSetpoint", "configure", "refresh"])
+    details(["temperature", "heatingSetpoint", "coolingSetpoint", "thermostatMode", "configure", "refresh"])
 }
 
 // parse events into attributes
@@ -123,29 +125,31 @@ def parse(String description) {
 	log.debug "Parsing --- Start"
     log.debug "parse got called with '${description}'"
     
-    if (description?.startsWith("read attr -")) {
-		def descMap = zigbee.parseDescriptionAsMap(description)
-		log.debug "Desc Map: $descMap"
-		if (descMap.clusterInt == THERMOSTAT_CLUSTER) {
-    		if (descMap.attrInt == ATTRIBUTE_SYSTEM_MODE) {
-				log.debug "MODE - ${descMap.value}"
-				def value = modeMap[descMap.value]
+    def map = [:]
+    
+    def descMap = zigbee.parseDescriptionAsMap(description)
+    log.debug "Desc Map: $descMap"
+    if (descMap.clusterInt == THERMOSTAT_CLUSTER) {
+        log.debug "We are in Thermostat Cluster"
 
-				// If we receive an off here then we are off
-				// Else we will determine the real mode in the mfg specific packet so store this
-				if (value == "off") {
-					map.name = "thermostatMode"
-					map.value = value
-					map.data = [supportedThermostatModes: supportedThermostatModes]
-				}
-            }
+        if (descMap.attrInt == ATTRIBUTE_SYSTEM_MODE) {
+            log.debug "MODE - ${descMap.value}"
+            def value = modeMap[descMap.value]
+            log.debug "value: " + value
+            map.name = "thermostatMode"
+            map.value = value
         }
     }
     // TODO: handle 'temperature' attribute
     
 	// TODO: handle 'heatingSetpoint' attribute
 	
-    log.debug "Parsing --- Done"
+    def result = null
+	if (map) {
+		result = createEvent(map)
+	}
+	log.debug "Parse returned $result"
+	return result
 }
 
 // handle commands
@@ -266,10 +270,11 @@ def off()
 def setThermostatMode(String mode)
 {
 	log.debug "setThermostatMode --- Start"
-    log.debug "setThermostatMode '${mode}'"
+    log.debug "setThermostatMode: ${mode}"
     
     if (supportedThermostatModes.contains(mode)) {
     	def currentMode = device.currentState("thermostatMode")?.value
+        log.debug "Current thermostat mode:" + currentMode
 		int modeNumber;
         
         switch(mode) {
@@ -290,11 +295,15 @@ def setThermostatMode(String mode)
 				modeNumber = 00
                 break
         }
-        log.debug "Thermostat cluster:" + THERMOSTAT_CLUSTER + " System mode:" + ATTRIBUTE_SYSTEM_MODE + " mode:" + modeNumber + " DataType:" + DataType.UINT16
+        
         try {
+        	log.debug "Writing attribute:" + THERMOSTAT_CLUSTER + " System mode:" + ATTRIBUTE_SYSTEM_MODE + " mode:" + modeNumber + " DataType:" + DataType.UINT16
         	zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE, DataType.ENUM8, modeNumber)
+            
+            log.debug "Sending event"
+            sendEvent(name:"thermostatMode",value:"${mode}")
         } catch(IllegalArgumentException ex) {
-        	log.error "Unexpected error" + ex.toString()
+        	log.error "Unexpected error" + ex
         }
         
     } else {
@@ -334,6 +343,13 @@ def ping() {
 def getSupportedThermostatModes() {
 	["heat", "cool", "auto", "off"]
 }
+
+def getModeMap() {[
+	"00":"off",
+    "01":"auto",
+    "03":"cool",
+	"04":"heat"
+]}
 
 def getTHERMOSTAT_CLUSTER() { 0x0201 }
 def getATTRIBUTE_LOCAL_TEMP() { 0x0000 }
