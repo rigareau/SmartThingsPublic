@@ -17,12 +17,14 @@ import physicalgraph.zigbee.zcl.DataType
 
 metadata {
 	definition (name: "Centralite Zigbee Thermostat 3156105", namespace: "RGASoft", author: "Richard Gareau", cstHandler: true) {
-		capability "Temperature Measurement"
+		capability "Battery"
+        capability "Temperature Measurement"
 		capability "Thermostat Heating Setpoint"
         capability "Thermostat Cooling Setpoint"
         capability "Thermostat Fan Mode"
         capability "Thermostat Mode"
         capability "Thermostat Operating State"
+        capability "Power Source"
         capability "Configuration"
         capability "Health Check"
         capability "Refresh"
@@ -33,6 +35,7 @@ metadata {
 
 	simulator {
 		// TODO: define status and reply messages here
+        /***
         log.debug "Simulator method called"
         
         status "system mode off":  "read attr - raw: 7AF81902010A0000293408, dni: 7AF8, endpoint: 19, cluster: 0201, size: 10, attrId: 001C, encoding: 20, value: 00"
@@ -42,6 +45,7 @@ metadata {
 		status "catchall": "catchall: 0104 0201 01 01 0000 00 A6BA 01 01 106A 22 01 00000101"
         
         reply "system mode off": "catchall: 0104 0201 01 01 0000 00 A6BA 01 01 106A 22 01 01000000"
+        ***/
 	}
 
 	tiles {
@@ -120,6 +124,10 @@ metadata {
 			state "fan only", label: "Fan Only", icon:"st.thermostat.auto"
 		}
         
+        valueTile("battery", "device.battery", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
+			state "battery", label:'${currentValue}% battery', unit:""
+		}
+        
         standardTile("refresh", "device.refresh", decoration: "flat", width: 2, height: 2) {
 			state "default", action:"refresh.refresh", icon:"st.secondary.refresh"
 		}
@@ -129,13 +137,12 @@ metadata {
 	}
     
     main("temperature")
-    details(["temperature", "heatingSetpoint", "coolingSetpoint", "thermostatMode", "configure", "refresh"])
+    details(["temperature", "heatingSetpoint", "coolingSetpoint", "thermostatMode", "battery", "configure", "refresh"])
 }
 
 // parse events into attributes
 def parse(String description) {
-	log.debug "Parsing --- Start"
-    log.debug "parse got called with '${description}'"
+	log.debug "Parsing '${description}'"
     
     def map = [:]
     
@@ -208,6 +215,32 @@ def parse(String description) {
         }
     }
     
+
+    if (descMap.clusterInt == zigbee.POWER_CONFIGURATION_CLUSTER) {
+    	log.debug "Power Configuration Cluster"
+        switch (descMap.attrInt) {
+        	case ATTRIBUTE_BATTERY_INFORMATION:
+            	log.debug "Battery Information ${descMap.value}"
+                break;
+        	case ATTRIBUTE_BATTERY_VOLTAGE:
+            	log.debug "BATTERY VOLTAGE ${descMap.value}"
+                break;
+            case ATTRIBUTE_BATTERY_PERCENTAGE:
+            	log.debug "BATTERY PERCENTAGE ${descMap.data}"
+                map.name = "battery"
+                map.value = descMap.data[2]
+                //map.value = getBatteryLevel(descMap.attrInt)
+                break;
+            default:
+            	log.debug "Attribute: ${descMap.attrInt} Value: ${descMap.value}"
+        }
+    }
+
+    if (descMap.clusterInt == BASIC_CLUSTER && descMap.attrInt == ATTRIBUTE_POWER_SOURCE) {
+        def powerSource = getPowerSourceMap(descMap.value)
+        log.debug "POWER SOURCE is : ${powerSource}"
+    } 
+        
     def result = null
 	if (map) {
 		result = createEvent(map)
@@ -218,51 +251,63 @@ def parse(String description) {
 
 // handle commands
 /*** Thermostat Heating Setpoint ***/
-def setHeatingSetpoint(Double degree) {
-	log.debug "setHeatingSetpoint --- Start"
+def setHeatingSetpoint(Double preciseDegrees) {
+	log.debug "setHeatingSetpoint(${preciseDegrees}) --- Start"
     
-    if (degrees != null) {
+    def retVal = ""
+    def currentValue = device.currentValue("heatingSetpoint")
+    
+    if (preciseDegrees != null) {
 		def temperatureScale = getTemperatureScale()
-
-		def degreesInteger = Math.round(degree)
-		log.debug "setHeatingSetpoint({$degreesInteger} ${temperatureScale})"
-		sendEvent("name": "heatingSetpoint", "value": degreesInteger, "unit": temperatureScale)
-
-		def celsius = (getTemperatureScale() == "C") ? degreesInteger : (fahrenheitToCelsius(degreesInteger) as Double).round(2)
-		"st wattr 0x${device.deviceNetworkId} 1 0x201 0x12 0x29 {" + hex(celsius * 100) + "}"
-	}
-    
-    
-    if (degree != null) {
-		def temperatureScale = getTemperatureScale()
-		float minSetpoint = thermostatSetpointRange[minSetpointIndex]
-		float maxSetpoint = thermostatSetpointRange[maxSetpointIndex]
+		float minSetpoint = thermostatSetpointRange["min"]
+		float maxSetpoint = thermostatSetpointRange["max"]
 
 		if (preciseDegrees >= minSetpoint && preciseDegrees <= maxSetpoint) {
 			def degrees = new BigDecimal(preciseDegrees).setScale(1, BigDecimal.ROUND_HALF_UP)
 			def celsius = (getTemperatureScale() == "C") ? degrees : (fahrenheitToCelsius(degrees) as Float).round(2)
 
-			log.debug "setHeatingSetpoint({$degrees} ${temperatureScale})"
+			log.debug "setHeatingSetpoint(${degrees} ${temperatureScale})"
 
-			zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEAT_SETPOINT, DataType.INT16, zigbee.convertToHexString(celsius * 100, 4)) +
-				zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEAT_SETPOINT) +
-				zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_PI_HEATING_STATE)
+			sendEvent("name":"heatingSetpoint", "value":degrees)
+			retVal = zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT, DataType.INT16, zigbee.convertToHexString(celsius * 100, 4))
 		} else {
 			log.debug "heatingSetpoint $preciseDegrees out of range! (supported: $minSetpoint - $maxSetpoint ${getTemperatureScale()})"
+            sendEvent("name":"heatingSetpoint", "value":currentValue)
+            retVal = zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT)
 		}
 	}
-    
+    return retVal
     log.debug "setHeatingSetpoint --- Done"
 }
 /*** Thermostat Heating Setpoint ***/
 
 /*** Thermostat Cooling Setpoint ***/
-def setCoolingSetpoint(Double coolSetPoint) {
-	log.debug "setCoolingSetpoint --- Start"
+def setCoolingSetpoint(Double preciseDegrees) {
+	log.debug "setCoolingSetpoint(${preciseDegrees}) --- Start"
 	
-    log.debug "Setting cooling set point to " + coolSetPoint
-    // TODO: handle 'setCoolingSetpoint' command
+    def retVal = ""
+    def currentValue = device.currentValue("coolingSetpoint")
     
+    if (preciseDegrees != null) {
+		def temperatureScale = getTemperatureScale()
+		float minSetpoint = thermostatSetpointRange["min"]
+		float maxSetpoint = thermostatSetpointRange["max"]
+
+		if (preciseDegrees >= minSetpoint && preciseDegrees <= maxSetpoint) {
+			def degrees = new BigDecimal(preciseDegrees).setScale(1, BigDecimal.ROUND_HALF_UP)
+			def celsius = (getTemperatureScale() == "C") ? degrees : (fahrenheitToCelsius(degrees) as Float).round(2)
+
+			log.debug "setCoolingSetpoint(${degrees} ${temperatureScale})"
+
+			sendEvent("name":"coolingSetpoint", "value":degrees)
+			retVal = zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_COOLING_SETPOINT, DataType.INT16, zigbee.convertToHexString(celsius * 100, 4))
+		} else {
+			log.debug "coolingSetpoint $preciseDegrees out of range! (supported: $minSetpoint - $maxSetpoint ${getTemperatureScale()})"
+            sendEvent("name":"coolingSetpoint", "value":currentValue)
+            retVal = zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_COOLING_SETPOINT)
+		}
+	}
+    return retVal
     log.debug "setCoolingSetpoint --- Done"
 }
 /*** Thermostat Cooling Setpoint ***/
@@ -299,7 +344,7 @@ def setThermostatFanMode(String mode){
 def heat()
 {
 	log.debug "heat --- Start"
-    //setThermostatMode("heat")
+    setThermostatMode("heat")
     log.debug "heat --- Done"
 }
 
@@ -373,7 +418,11 @@ def refresh()
 		zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT) +
 		zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE) +
         zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_RUNNING_STATE) +
-        zigbee.readAttribute(FAN_CONTROL_CLUSTER, ATTRIBUTE_FAN_MODE)
+        zigbee.readAttribute(FAN_CONTROL_CLUSTER, ATTRIBUTE_FAN_MODE) +
+        //zigbee.readAttribute(zigbee.POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_VOLTAGE) +
+        zigbee.readAttribute(zigbee.POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_PERCENTAGE) +
+		zigbee.readAttribute(zigbee.POWER_CONFIGURATION_CLUSTER, BATTERY_ALARM_STATE) +
+        zigbee.readAttribute(BASIC_CLUSTER, ATTRIBUTE_POWER_SOURCE)
 }
 /*** Capability Refresh ***/
 
@@ -385,11 +434,16 @@ def configure() {
 	def startValues = zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT, DataType.INT16, 0x07D0) +
 		zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_COOLING_SETPOINT, DataType.INT16, 0x0A28)
     
+    def reporting = zigbee.configureReporting(0x0201, 0x0029, 0x19, 0, 0, null) +  	// Thermostat Operating State report to send whenever it changes (no min or max, or change threshold).  This is also known as Running State (Zen).
+        zigbee.configureReporting(0x0201, 0x001c, 0x30, 0, 0, null) +
+        zigbee.configureReporting(0x0000, 0x0007, 0x30, 0, 0, null) +
+        zigbee.configureReporting(0x0001, 0x0002, 0x30, 0, 0, null)
     
     log.debug "bindings: ${bindings}"
     log.debug "startvalues: ${startValues}"
+    log.debug "reporting: ${reporting}"
 	log.debug "configure --- done"
-    return bindings + startValues + refresh()
+    return bindings + startValues + reporting + zigbee.batteryConfig() + refresh()
 }
 /*** Capability Configure ***/
 
@@ -412,6 +466,23 @@ def getTemperature(value) {
 	}
 }
 
+private getBatteryLevel(int intValue) {
+	def min = 2.1
+    def max = 3.3
+    def vBatt = intValue / 10
+    return ((vBatt - min) / (max - min) * 100)
+}
+
+private String getPowerSourceMap(value) {
+	log.debug "getPowerSourceMap(${value})"
+	String retVal = ""
+    if (value == "81") {
+        retVal = "mains"
+    } else {
+        retVal = "batteries"
+    }
+    return retVal
+}
 
 def getSupportedThermostatModes() {
 	["heat", "cool", "auto", "off"]
@@ -423,6 +494,15 @@ def getModeMap() {[
     "03":"cool",
 	"04":"heat"
 ]}
+
+private getThermostatSetpointRange() {
+	[
+      "min":07,
+      "max":30
+    ]
+}
+private getBASIC_CLUSTER() { 0x0000 }
+private getATTRIBUTE_POWER_SOURCE() { 0x0007 }
 
 private getTHERMOSTAT_CLUSTER() { 0x0201 }
 private getATTRIBUTE_LOCAL_TEMPERATURE() { 0x0000 }
@@ -439,3 +519,10 @@ private getATTRIBUTE_FAN_MODE_MAP() {
 		"05":"auto"
 	]
 }
+
+private getPOWER_CONFIGURATION_CLUSTER() { 0X0001 }
+private getATTRIBUTE_BATTERY_INFORMATION() { 0x002 }
+private getATTRIBUTE_BATTERY_VOLTAGE() { 0x0020 }
+private getATTRIBUTE_BATTERY_PERCENTAGE() { 0x0021 }
+
+private getBATTERY_ALARM_STATE() { 0x003E }
