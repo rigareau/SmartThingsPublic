@@ -28,8 +28,10 @@ metadata {
         capability "Configuration"
         capability "Health Check"
         capability "Refresh"
+        capability "Actuator"
+        capability "Sensor"
         
-        fingerprint profileId: "0104", inClusters: "0000, 0003, 0004, 0201, 0204", outClusters: "0402", manufacturer: "Centralite", model: "3156105", deviceJoinName: "Centralite Thermostat 3156105"
+        fingerprint profileId: "0104", inClusters: "0000, 0001, 0201, 0202, 0204", outClusters: "0402", manufacturer: "Centralite", model: "3156105", deviceJoinName: "Centralite Thermostat 3156105"
 	}
 
 
@@ -127,6 +129,10 @@ metadata {
         valueTile("battery", "device.battery", inactiveLabel: false, decoration: "flat", width: 2, height: 2) {
 			state "battery", label:'${currentValue}% battery', unit:""
 		}
+                
+        valueTile("powerSource", "device.powerSource", width: 2, heigh: 1, inactiveLabel: true, decoration: "flat") {
+			state "powerSource", label: 'Power Source: ${currentValue}', action:"configuration.configure", backgroundColor: "#ffffff"
+		}
         
         standardTile("refresh", "device.refresh", decoration: "flat", width: 2, height: 2) {
 			state "default", action:"refresh.refresh", icon:"st.secondary.refresh"
@@ -137,7 +143,7 @@ metadata {
 	}
     
     main("temperature")
-    details(["temperature", "heatingSetpoint", "coolingSetpoint", "thermostatMode", "battery", "configure", "refresh"])
+    details(["temperature", "heatingSetpoint", "coolingSetpoint", "thermostatMode", "battery", "powerSource", "configure", "refresh"])
 }
 
 // parse events into attributes
@@ -219,18 +225,28 @@ def parse(String description) {
     if (descMap.clusterInt == zigbee.POWER_CONFIGURATION_CLUSTER) {
     	log.debug "Power Configuration Cluster"
         switch (descMap.attrInt) {
+        	case ATTRIBUTE_MAINS_INFORMATION:
+            	log.debug "MAINS INFORMATION ${descMap.data}"
+                break
+            case ATTRIBUTE_MAINS_SETTINGS:
+            	log.debug "MAINS SETTINGS ${descMap.data}"
+                break
         	case ATTRIBUTE_BATTERY_INFORMATION:
-            	log.debug "Battery Information ${descMap.value}"
-                break;
+            	log.debug "BATTERY INFORMATION ${descMap.data}"
+                break
+            case ATTRIBUTE_BATTERY_SETTINGS:
+            	log.debug "BATTERY SETTINGS ${descMap.data}"
+                break
         	case ATTRIBUTE_BATTERY_VOLTAGE:
             	log.debug "BATTERY VOLTAGE ${descMap.value}"
-                break;
+                break
             case ATTRIBUTE_BATTERY_PERCENTAGE:
             	log.debug "BATTERY PERCENTAGE ${descMap.data}"
                 map.name = "battery"
-                map.value = descMap.data[2]
-                //map.value = getBatteryLevel(descMap.attrInt)
-                break;
+                map.value = 50
+                break
+            case ATTRIBUTE_BATTERY_ALARM_STATE:
+            	log.debug "BATTERY ALARM STATE ${descMap.data}"
             default:
             	log.debug "Attribute: ${descMap.attrInt} Value: ${descMap.value}"
         }
@@ -239,6 +255,8 @@ def parse(String description) {
     if (descMap.clusterInt == BASIC_CLUSTER && descMap.attrInt == ATTRIBUTE_POWER_SOURCE) {
         def powerSource = getPowerSourceMap(descMap.value)
         log.debug "POWER SOURCE is : ${powerSource}"
+        map.name = "powerSource"
+        map.value = powerSource
     } 
         
     def result = null
@@ -271,6 +289,7 @@ def setHeatingSetpoint(Double preciseDegrees) {
 			sendEvent("name":"heatingSetpoint", "value":degrees)
 			retVal = zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT, DataType.INT16, zigbee.convertToHexString(celsius * 100, 4))
 		} else {
+        	
 			log.debug "heatingSetpoint $preciseDegrees out of range! (supported: $minSetpoint - $maxSetpoint ${getTemperatureScale()})"
             sendEvent("name":"heatingSetpoint", "value":currentValue)
             retVal = zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT)
@@ -419,9 +438,7 @@ def refresh()
 		zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE) +
         zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_RUNNING_STATE) +
         zigbee.readAttribute(FAN_CONTROL_CLUSTER, ATTRIBUTE_FAN_MODE) +
-        //zigbee.readAttribute(zigbee.POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_VOLTAGE) +
-        zigbee.readAttribute(zigbee.POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_PERCENTAGE) +
-		zigbee.readAttribute(zigbee.POWER_CONFIGURATION_CLUSTER, BATTERY_ALARM_STATE) +
+        zigbee.readAttribute(zigbee.POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_VOLTAGE) +
         zigbee.readAttribute(BASIC_CLUSTER, ATTRIBUTE_POWER_SOURCE)
 }
 /*** Capability Refresh ***/
@@ -430,14 +447,23 @@ def refresh()
 def configure() {
 	log.debug "configure --- Start"
     def bindings = zigbee.addBinding(THERMOSTAT_CLUSTER) +
-    	zigbee.addBinding(FAN_CONTROL_CLUSTER)
+    	zigbee.addBinding(FAN_CONTROL_CLUSTER) +
+        zigbee.addBinding(BASIC_CLUSTER) +
+        zigbee.addBinding(POWER_CONFIGURATION_CLUSTER)
+        
 	def startValues = zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT, DataType.INT16, 0x07D0) +
 		zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_COOLING_SETPOINT, DataType.INT16, 0x0A28)
-    
-    def reporting = zigbee.configureReporting(0x0201, 0x0029, 0x19, 0, 0, null) +  	// Thermostat Operating State report to send whenever it changes (no min or max, or change threshold).  This is also known as Running State (Zen).
-        zigbee.configureReporting(0x0201, 0x001c, 0x30, 0, 0, null) +
-        zigbee.configureReporting(0x0000, 0x0007, 0x30, 0, 0, null) +
-        zigbee.configureReporting(0x0001, 0x0002, 0x30, 0, 0, null)
+                    
+        // Thermostat Current Temperature every 5 minutes up to an hour change amount 1
+    def reporting = zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_LOCAL_TEMPERATURE, DataType.INT16, 0, 0, 0x01) + 
+        // Thermostat Operating State report to send whenever it changes (no min or max, or change threshold).
+    	zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_RUNNING_STATE, DataType.BITMAP16, 0, 0, null) +  
+        // Thermostat Mode report to send whenever it changes (no min or max, or change threshold).
+        zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE, DataType.ENUM8, 0, 0, null) +
+        zigbee.configureReporting(POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_PERCENTAGE, DataType.UINT8, 0, 30, null) +
+        zigbee.configureReporting(POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_VOLTAGE, DataType.UINT8, 0, 30, null) +
+        zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT, DataType.INT16, 0, 0, 0x01) +
+        zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_COOLING_SETPOINT, DataType.INT16, 0, 0, 0x01)
     
     log.debug "bindings: ${bindings}"
     log.debug "startvalues: ${startValues}"
@@ -521,8 +547,10 @@ private getATTRIBUTE_FAN_MODE_MAP() {
 }
 
 private getPOWER_CONFIGURATION_CLUSTER() { 0X0001 }
+private getATTRIBUTE_MAINS_INFORMATION() { 0x0000 }
+private getATTRIBUTE_MAINS_SETTINGS() { 0x0000 }
 private getATTRIBUTE_BATTERY_INFORMATION() { 0x002 }
+private getATTRIBUTE_BATTERY_SETTINGS() { 0x003 }
 private getATTRIBUTE_BATTERY_VOLTAGE() { 0x0020 }
 private getATTRIBUTE_BATTERY_PERCENTAGE() { 0x0021 }
-
-private getBATTERY_ALARM_STATE() { 0x003E }
+private getATTRIBUTE_BATTERY_ALARM_STATE() { 0x003E }
