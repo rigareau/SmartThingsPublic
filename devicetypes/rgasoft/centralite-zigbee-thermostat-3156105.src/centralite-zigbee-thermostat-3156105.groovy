@@ -24,14 +24,14 @@ metadata {
         capability "Thermostat Fan Mode"
         capability "Thermostat Mode"
         capability "Thermostat Operating State"
-        capability "Power Source"
+        //capability "Power Source"
         capability "Configuration"
         capability "Health Check"
         capability "Refresh"
         capability "Actuator"
         capability "Sensor"
         
-        fingerprint profileId: "0104", inClusters: "0000, 0001, 0201, 0202, 0204", outClusters: "0402", manufacturer: "Centralite", model: "3156105", deviceJoinName: "Centralite Thermostat 3156105"
+        fingerprint profileId: "0104", inClusters: "00000 0001 0003 0004 0009 0201 0202 0204", manufacturer: "CentraLite Systems", model: "3156105", deviceJoinName: "Centralite Thermostat 3156105"
 	}
 
 
@@ -50,7 +50,31 @@ metadata {
         ***/
 	}
 
-	tiles {
+	tiles(scale: 2) {
+    	multiAttributeTile(name:"thermostatMulti", type:"thermostat", width:6, height:4, canChangeIcon: true) {
+			tileAttribute("device.temperature", key: "PRIMARY_CONTROL") {
+				attributeState("temperature", label:'${currentValue}°', icon: "st.alarm.temperature.normal")
+			}
+			tileAttribute("device.heatingSetpoint", key: "VALUE_CONTROL") {
+				attributeState("VALUE_UP", action: "increaseHeatSetpoint")
+				attributeState("VALUE_DOWN", action: "decreaseHeatSetpoint")
+			}
+			tileAttribute("device.thermostatOperatingState", key: "OPERATING_STATE") {
+				attributeState("idle", backgroundColor:"#44b621")
+				attributeState("heating", backgroundColor:"#ffa81e")
+			}
+			tileAttribute("device.thermostatMode", key: "THERMOSTAT_MODE") {
+				attributeState("off", label:'${name}')
+				attributeState("cool", label:'${name}')
+                attributeState("heat", label:'${name}')
+				attributeState("auto", label:'${name}')
+			}
+			tileAttribute("device.heatingSetpoint", key: "HEATING_SETPOINT") {
+				attributeState("heatingSetpoint", label:'${currentValue}°')
+			}
+		}
+
+/**
     	valueTile("temperature", "device.temperature", width: 2, height: 2) {
 			state("temperature", label:'${currentValue}°', unit:"F",
 				backgroundColors:[
@@ -64,7 +88,7 @@ metadata {
 				]
 			)
 		}
-     
+*/     
         valueTile("heatingSetpoint", "device.heatingSetpoint", width: 2, height: 2) {
 			state "heatingSetpoint", label:'Setpoint ${currentValue}°', backgroundColors:[
 					// Celsius
@@ -112,7 +136,7 @@ metadata {
 			state "on",	action: "setThermostatFanMode", label: 'On', icon: "st.thermostat.fan-on"
 		}
         
-        standardTile("thermostatmode", "device.thermostatMode", inactiveLabel: false, decoration: "flat") {
+        standardTile("thermostatMode", "device.thermostatMode", inactiveLabel: false, decoration: "flat") {
 			state "off", label: "off", action:"thermostat.off", icon:"st.thermostat.heating-cooling-off"
 			state "cool", label: "cool", action:"thermostat.cool", icon:"st.thermostat.cool"
 			state "heat", label: "heat", action:"thermostat.heat", icon:"st.thermostat.heat"
@@ -130,8 +154,8 @@ metadata {
 			state "battery", label:'${currentValue}% battery', unit:""
 		}
                 
-        valueTile("powerSource", "device.powerSource", width: 2, heigh: 1, inactiveLabel: true, decoration: "flat") {
-			state "powerSource", label: 'Power Source: ${currentValue}', action:"configuration.configure", backgroundColor: "#ffffff"
+        valueTile("powerSource", "device.powerSource", inactiveLabel: false, decoration: "flat", width: 2, heigh: 2, ) {
+			state "powerSource", label: 'Power Source: ${currentValue}', backgroundColor: "#ffffff"
 		}
         
         standardTile("refresh", "device.refresh", decoration: "flat", width: 2, height: 2) {
@@ -143,7 +167,7 @@ metadata {
 	}
     
     main("temperature")
-    details(["temperature", "heatingSetpoint", "coolingSetpoint", "thermostatMode", "battery", "powerSource", "configure", "refresh"])
+    details(["temperature", "heatingSetpoint", "coolingSetpoint", "thermostatMode", "thermostatFanMode", "thermostatOperatingState", "battery", "powerSource", "configure", "refresh"])
 }
 
 // parse events into attributes
@@ -239,11 +263,11 @@ def parse(String description) {
                 break
         	case ATTRIBUTE_BATTERY_VOLTAGE:
             	log.debug "BATTERY VOLTAGE ${descMap.value}"
+                map.name = "battery"
+                map.value = getBatteryLevel(descMap.attrInt)
                 break
             case ATTRIBUTE_BATTERY_PERCENTAGE:
             	log.debug "BATTERY PERCENTAGE ${descMap.data}"
-                map.name = "battery"
-                map.value = 50
                 break
             case ATTRIBUTE_BATTERY_ALARM_STATE:
             	log.debug "BATTERY ALARM STATE ${descMap.data}"
@@ -455,13 +479,13 @@ def configure() {
 		zigbee.writeAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_COOLING_SETPOINT, DataType.INT16, 0x0A28)
                     
         // Thermostat Current Temperature every 5 minutes up to an hour change amount 1
-    def reporting = zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_LOCAL_TEMPERATURE, DataType.INT16, 0, 0, 0x01) + 
+    def reporting = zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_LOCAL_TEMPERATURE, DataType.INT16, 10, 60, 50) + 
         // Thermostat Operating State report to send whenever it changes (no min or max, or change threshold).
     	zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_RUNNING_STATE, DataType.BITMAP16, 0, 0, null) +  
         // Thermostat Mode report to send whenever it changes (no min or max, or change threshold).
         zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_SYSTEM_MODE, DataType.ENUM8, 0, 0, null) +
-        zigbee.configureReporting(POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_PERCENTAGE, DataType.UINT8, 0, 30, null) +
-        zigbee.configureReporting(POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_VOLTAGE, DataType.UINT8, 0, 30, null) +
+        zigbee.configureReporting(POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_PERCENTAGE, DataType.UINT8, 30, 21600, 0x01) +
+        zigbee.configureReporting(POWER_CONFIGURATION_CLUSTER, ATTRIBUTE_BATTERY_VOLTAGE, DataType.UINT8, 30, 21600, 0x01) +
         zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_HEATING_SETPOINT, DataType.INT16, 0, 0, 0x01) +
         zigbee.configureReporting(THERMOSTAT_CLUSTER, ATTRIBUTE_COOLING_SETPOINT, DataType.INT16, 0, 0, 0x01)
     
@@ -493,10 +517,9 @@ def getTemperature(value) {
 }
 
 private getBatteryLevel(int intValue) {
-	def min = 2.1
-    def max = 3.3
-    def vBatt = intValue / 10
-    return ((vBatt - min) / (max - min) * 100)
+	def min = 15
+    def max = 32
+    return ((intValue - min) / (max - min) * 100) as int
 }
 
 private String getPowerSourceMap(value) {
