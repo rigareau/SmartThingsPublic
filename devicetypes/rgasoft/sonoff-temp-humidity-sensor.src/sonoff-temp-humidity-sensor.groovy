@@ -16,7 +16,7 @@
 import physicalgraph.zigbee.zcl.DataType
 
 metadata {
-	definition(name: "Sonoff Temp/Humidity Sensor", namespace: "RGASoft", author: "Richard Gareau", runLocally: true, minHubCoreVersion: '000.017.0012', executeCommandsLocally: false, ocfDeviceType: "oic.d.thermostat") {
+	definition(name: "Sonoff Temp/Humidity Sensor", namespace: "RGASoft", author: "Richard Gareau", runLocally: true, executeCommandsLocally: false, ocfDeviceType: "oic.d.thermostat") {
 		capability "Configuration"
 		capability "Battery"
 		capability "Refresh"
@@ -25,7 +25,7 @@ metadata {
 		capability "Health Check"
 		capability "Sensor"
 
-		fingerprint profileId: "0104", inClusters: "0001,0003,0020,0402,0B05,FC45", outClusters: "0019,0003", manufacturer: "eWeLink", model: "TH01", deviceJoinName: "Sonoff Multipurpose Sensor"
+		fingerprint profileId: "0104", inClusters: "0000,0001,0003,0402,0405", outClusters: "0003", manufacturer: "eWeLink", model: "TH01", deviceJoinName: "Sonoff Multipurpose Sensor"
 	}
 
 	simulator {
@@ -74,27 +74,47 @@ metadata {
 def parse(String description) {
 	log.debug "Parsing '${description}'"
     
-    def myMap = zigbee.parseDescriptionAsMap(description)
-	log.debug "My Map: $myMap"
-    
 	// getEvent will handle temperature and humidity
 	Map map = zigbee.getEvent(description)
+    log.debug "Map: ${map}"
 	if (!map) {
 		Map descMap = zigbee.parseDescriptionAsMap(description)
-		if (descMap.clusterInt == 0x0001 && descMap.commandInt != 0x07 && descMap?.value) {
-			if (descMap.attrInt == 0x0021) {
-				map = getBatteryPercentageResult(Integer.parseInt(descMap.value,16))
-			} else {
+        log.debug("descMap: ${descMap}")
+		if (descMap.clusterInt == zigbee.POWER_CONFIGURATION_CLUSTER) {
+			if (descMap.attrInt == 0x0020) {
 				map = getBatteryResult(Integer.parseInt(descMap.value, 16))
-			}
-		} else if (descMap?.clusterInt == zigbee.TEMPERATURE_MEASUREMENT_CLUSTER && descMap.commandInt == 0x07) {
-			if (descMap.data[0] == "00") {
-				log.debug "TEMP REPORTING CONFIG RESPONSE: $descMap"
-				sendEvent(name: "checkInterval", value: 60 * 12, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+			} else if (descMap.attrInt == 0x0021) {
+				map = getBatteryPercentageResult(Integer.parseInt(descMap.value,16))
+			} else if (descMap.commandInt == 7) {
+            	if (descMap.data[0] == "00") {
+            		log.debug("Battery reporting config response: success")
+                } else {
+                	log.warn("Battery reporting config failed with error: ${descMap.data[0]}")
+                }
+            } else {
+            	log.warn("Unexpected event: ${descMap}")
+            }
+		} else if (descMap.clusterInt == zigbee.TEMPERATURE_MEASUREMENT_CLUSTER) {
+			if (descMap.commandInt == 7) {
+            	if (descMap.data[0] == "00") {
+					log.debug "Temp reporting config response: success"
+                } else {
+					log.warn "Temperature reporting config failed with error: ${descMap.data[0]}"
+				}
 			} else {
-				log.warn "TEMP REPORTING CONFIG FAILED- error code: ${descMap.data[0]}"
-			}
-		}
+            	log.warn("Unexpected event: ${descMap}")
+            }
+		} else if (descMap.clusterInt == zigbee.RELATIVE_HUMIDITY_CLUSTER) {
+			if (descMap.commandInt == 7) {
+            	if (descMap.data[0] == "00") {
+					log.debug "Relative humidity reporting config response: success"
+                } else {
+					log.warn "Relative humidity reporting config failed with error: ${descMap.data[0]}"
+				}
+			} else {
+            	log.warn("Unexpected event: ${descMap}")
+            }
+		} 
 	} else if (map.name == "temperature") {
 		if (tempOffset) {
 			map.value = new BigDecimal((map.value as float) + (tempOffset as float)).setScale(1, BigDecimal.ROUND_HALF_UP)
@@ -112,7 +132,7 @@ def parse(String description) {
 }
 
 
-def getBatteryPercentageResult(rawValue) {
+private Map getBatteryPercentageResult(rawValue) {
 	log.debug "Battery Percentage rawValue = ${rawValue} -> ${rawValue / 2}%"
 	def result = [:]
 
@@ -153,14 +173,25 @@ private Map getBatteryResult(rawValue) {
  * PING is used by Device-Watch in attempt to reach the Device
  * */
 def ping() {
-	return zigbee.readAttribute(0x0001, 0x0020) // Read the Battery Level
+	log.debug("Ping")
+	return zigbee.readAttribute(zigbee.POWER_CONFIGURATION_CLUSTER, 0x0020) // Read the Battery Level
+}
+
+def installed() {
+// Device wakes up every 1 hour, this interval allows us to miss one wakeup notification before marking offline
+	log.debug "Configured health checkInterval when installed()"
+	sendEvent(name: "checkInterval", value: 2 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+}
+
+def updated() {
+// Device wakes up every 1 hours, this interval allows us to miss one wakeup notification before marking offline
+	log.debug "Configured health checkInterval when updated()"
+	sendEvent(name: "checkInterval", value: 2 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
 }
 
 def refresh() {
 	log.debug "refresh temperature, humidity, and battery"
-
-	def manufacturer = device.getDataValue("manufacturer")
-	def reads = zigbee.readAttribute(0x0001, 0x0020) +
+	def reads = zigbee.readAttribute(zigbee.POWER_CONFIGURATION_CLUSTER, 0x0020) +
     			zigbee.readAttribute(zigbee.TEMPERATURE_MEASUREMENT_CLUSTER, 0x0000)+
 				zigbee.readAttribute(zigbee.RELATIVE_HUMIDITY_CLUSTER, 0x0000)
     return reads
@@ -168,8 +199,8 @@ def refresh() {
 
 def configure() {
 	log.debug "Configuring Reporting and Bindings."
-
-	def reporting = zigbee.configureReporting(0x0001, 0x0020, DataType.UINT8, 30, 21600, 0x01) +
+	
+	def reporting = zigbee.configureReporting(zigbee.POWER_CONFIGURATION_CLUSTER, 0x0020, DataType.UINT8, 30, 21600, 0x01) +
     				zigbee.configureReporting(zigbee.RELATIVE_HUMIDITY_CLUSTER, 0x0000, DataType.UINT16, 60, 600, 1*100) +
 					zigbee.configureReporting(zigbee.TEMPERATURE_MEASUREMENT_CLUSTER, 0x0000, DataType.INT16, 60, 600, 0xA)
 	return reporting
