@@ -155,120 +155,129 @@ metadata {
 def parse(String description) {
 	log.debug "Parsing '${description}'"
     
-    def map = [:]
-    
-    def descMap = zigbee.parseDescriptionAsMap(description)
-    log.debug "Desc Map: $descMap"
-    if (descMap.clusterInt == THERMOSTAT_CLUSTER) {
-        log.debug "We are in Thermostat Cluster"
-		if (descMap.attrInt == ATTRIBUTE_LOCAL_TEMPERATURE) {
-        	log.debug "TEMP"
-			map.name = "temperature"
-			map.value = getTemperature(descMap.value)
-			map.unit = getTemperatureScale()
-        }
+    Map map = zigbee.getEvent(description)
+    if (!map) {
+    	def descMap = zigbee.parseDescriptionAsMap(description)
+        log.debug "Desc Map: ${descMap}"
+        
+        if (descMap.clusterInt == THERMOSTAT_CLUSTER) {
+            log.debug "We are in Thermostat Cluster"
+            if (descMap.attrInt == ATTRIBUTE_LOCAL_TEMPERATURE) {
+                log.debug "TEMP"
+                map.name = "temperature"
+                map.value = getTemperature(descMap.value)
+                map.unit = getTemperatureScale()
+            }
 
-        if (descMap.attrInt == ATTRIBUTE_SYSTEM_MODE) {
-            log.debug "MODE - ${descMap.value}"
-            def value = modeMap[descMap.value]
-            map.name = "thermostatMode"
-            map.value = value
-        }
-        
-        if (descMap.attrInt == ATTRIBUTE_COOLING_SETPOINT) {
-            log.debug "COOLING SETPOINT"
-			map.name = "coolingSetpoint"
-			map.value = getTemperature(descMap.value)
-			map.unit = getTemperatureScale()
-        }
-        
-        if (descMap.attrInt == ATTRIBUTE_HEATING_SETPOINT) {
-            log.debug "HEATING SETPOINT"
-			map.name = "heatingSetpoint"
-			map.value = getTemperature(descMap.value)
-			map.unit = getTemperatureScale()
-        }
-        
-        if (descMap.attrInt == ATTRIBUTE_RUNNING_STATE) {
-        	log.debug "RUNNING STATE"
-            def intValue = zigbee.convertHexToInt(descMap.value)
-            /**
-			 * Zigbee Cluster Library spec 6.3.2.2.3.7
-			 * Bit	Description
-			 *  0	Heat State
-			 *  1	Cool State
-			 *  2	Fan State
-			 *  3	Heat 2nd Stage State
-			 *  4	Cool 2nd Stage State
-			 *  5	Fan 2nd Stage State
-			 *  6	Fan 3rd Stage Stage
-			 **/
-            map.name = "thermostatOperatingState"
-            if (intValue & 0x01) {
-                map.value = "heating"
-            } else if (intValue & 0x02) {
-                map.value = "cooling"
-            } else if (intValue & 0x04) {
-                map.value = "fan only"
-            } else {
-                map.value = "idle"
+            if (descMap.attrInt == ATTRIBUTE_SYSTEM_MODE) {
+                log.debug "MODE - ${descMap.value}"
+                def value = modeMap[descMap.value]
+                map.name = "thermostatMode"
+                map.value = value
+            }
+
+            if (descMap.attrInt == ATTRIBUTE_COOLING_SETPOINT) {
+                log.debug "COOLING SETPOINT"
+                map.name = "coolingSetpoint"
+                map.value = getTemperature(descMap.value)
+                map.unit = getTemperatureScale()
+            }
+
+            if (descMap.attrInt == ATTRIBUTE_HEATING_SETPOINT) {
+                log.debug "HEATING SETPOINT"
+                map.name = "heatingSetpoint"
+                map.value = getTemperature(descMap.value)
+                map.unit = getTemperatureScale()
+            }
+
+            if (descMap.attrInt == ATTRIBUTE_RUNNING_STATE) {
+                log.debug "RUNNING STATE"
+                def intValue = zigbee.convertHexToInt(descMap.value)
+                /**
+                 * Zigbee Cluster Library spec 6.3.2.2.3.7
+                 * Bit	Description
+                 *  0	Heat State
+                 *  1	Cool State
+                 *  2	Fan State
+                 *  3	Heat 2nd Stage State
+                 *  4	Cool 2nd Stage State
+                 *  5	Fan 2nd Stage State
+                 *  6	Fan 3rd Stage Stage
+                 **/
+                map.name = "thermostatOperatingState"
+                if (intValue & 0x01) {
+                    map.value = "heating"
+                } else if (intValue & 0x02) {
+                    map.value = "cooling"
+                } else if (intValue & 0x04) {
+                    map.value = "fan only"
+                } else {
+                    map.value = "idle"
+                }
             }
         }
-    }
-	
-    if (descMap.clusterInt == FAN_CONTROL_CLUSTER) {
-        log.debug "Fan Control Cluster"
-		if (descMap.attrInt == ATTRIBUTE_FAN_MODE) {
-        	log.debug "FAN MODE"
-			map.name = "thermostatFanMode"
-			map.value = ATTRIBUTE_FAN_MODE_MAP[descMap.value]
-			map.data = [supportedThermostatFanModes: state.supportedFanModes]
+
+        if (descMap.clusterInt == FAN_CONTROL_CLUSTER) {
+            log.debug "Fan Control Cluster"
+            if (descMap.attrInt == ATTRIBUTE_FAN_MODE) {
+                log.debug "FAN MODE"
+                map.name = "thermostatFanMode"
+                map.value = ATTRIBUTE_FAN_MODE_MAP[descMap.value]
+                map.data = [supportedThermostatFanModes: state.supportedFanModes]
+            }
         }
+
+
+        if (descMap.clusterInt == POWER_CONFIGURATION_CLUSTER) {
+            log.debug "Power Configuration Cluster"
+            switch (descMap.attrInt) {
+                case ATTRIBUTE_MAINS_INFORMATION:
+                    log.debug "MAINS INFORMATION ${descMap.data}"
+                    break
+                case ATTRIBUTE_MAINS_SETTINGS:
+                    log.debug "MAINS SETTINGS ${descMap.data}"
+                    break
+                case ATTRIBUTE_BATTERY_INFORMATION:
+                    log.debug "BATTERY INFORMATION ${descMap.data}"
+                    break
+                case ATTRIBUTE_BATTERY_SETTINGS:
+                    log.debug "BATTERY SETTINGS ${descMap.data}"
+                    break
+                case ATTRIBUTE_BATTERY_VOLTAGE:
+                    log.debug "BATTERY VOLTAGE ${descMap.value}"
+                    map = getBatteryResult(Integer.parseInt(descMap.value, 16))
+                    break
+                case ATTRIBUTE_BATTERY_PERCENTAGE:
+                    log.debug "BATTERY PERCENTAGE ${descMap.data}"
+                    map = getBatteryPercentage(descMap.data)
+                    break
+                case ATTRIBUTE_BATTERY_ALARM_STATE:
+                    log.debug "BATTERY ALARM STATE ${descMap.data}"
+                default:
+                    log.debug "Attribute: ${descMap.attrInt} Value: ${descMap.value}"
+                    if (descMap.commandInt == 7) {
+                      if (descMap.data[0] == "00") {
+                        log.debug("Battery reporting config response: success")
+                      } else {
+                        log.warn("Battery reporting config failed with error: ${descMap.data[0]}")
+                      }
+                    }
+                    map = [:]
+            }
+        }
+
+        if (descMap.clusterInt == BASIC_CLUSTER && descMap.attrInt == ATTRIBUTE_POWER_SOURCE) {
+            def powerSource = getPowerSourceMap(descMap.value)
+            log.debug "POWER SOURCE is : ${powerSource}"
+            map.name = "powerSource"
+            map.value = powerSource
+        } 
+    } else {
+    	log.debug "Map: ${map}"
     }
     
-
-    if (descMap.clusterInt == POWER_CONFIGURATION_CLUSTER) {
-    	log.debug "Power Configuration Cluster"
-        switch (descMap.attrInt) {
-        	case ATTRIBUTE_MAINS_INFORMATION:
-            	log.debug "MAINS INFORMATION ${descMap.data}"
-                break
-            case ATTRIBUTE_MAINS_SETTINGS:
-            	log.debug "MAINS SETTINGS ${descMap.data}"
-                break
-        	case ATTRIBUTE_BATTERY_INFORMATION:
-            	log.debug "BATTERY INFORMATION ${descMap.data}"
-                break
-            case ATTRIBUTE_BATTERY_SETTINGS:
-            	log.debug "BATTERY SETTINGS ${descMap.data}"
-                break
-        	case ATTRIBUTE_BATTERY_VOLTAGE:
-            	log.debug "BATTERY VOLTAGE ${descMap.value}"
-                map = getBatteryResult(Integer.parseInt(descMap.value, 16))
-                break
-            case ATTRIBUTE_BATTERY_PERCENTAGE:
-            	log.debug "BATTERY PERCENTAGE ${descMap.data}"
-                map = getBatteryPercentage(descMap.data)
-                break
-            case ATTRIBUTE_BATTERY_ALARM_STATE:
-            	log.debug "BATTERY ALARM STATE ${descMap.data}"
-            default:
-            	log.debug "Attribute: ${descMap.attrInt} Value: ${descMap.value}"
-        }
-    }
-
-    if (descMap.clusterInt == BASIC_CLUSTER && descMap.attrInt == ATTRIBUTE_POWER_SOURCE) {
-        def powerSource = getPowerSourceMap(descMap.value)
-        log.debug "POWER SOURCE is : ${powerSource}"
-        map.name = "powerSource"
-        map.value = powerSource
-    } 
-        
-    def result = null
-	if (map) {
-		result = createEvent(map)
-	}
-	log.debug "Parse returned $result"
+	def result = map ? createEvent(map) : [:]
+	log.debug "Parse returned ${result}"
 	return result
 }
 
@@ -471,17 +480,31 @@ def configure() {
     log.debug "startvalues: ${startValues}"
     log.debug "reporting: ${reporting}"
 	log.debug "configure --- done"
-    return startValues + reporting
+    return startValues + reporting + refresh()
 }
 /*** Capability Configure ***/
 
 /*** Capability Health ***/
 def ping() {
 	log.debug "ping --- Start"
-    
+    def retVal = zigbee.readAttribute(THERMOSTAT_CLUSTER, ATTRIBUTE_LOCAL_TEMPERATURE)
     log.debug "ping --- Done"
+    return retVal
 }
 /*** Capability Health ***/
+
+def installed() {
+// Device wakes up every 1 hour, this interval allows us to miss one wakeup notification before marking offline
+	log.debug "Configured health checkInterval when installed()"
+	sendEvent(name: "checkInterval", value: 2 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+}
+
+def updated() {
+// Device wakes up every 1 hours, this interval allows us to miss one wakeup notification before marking offline
+	log.debug "Configured health checkInterval when updated()"
+	sendEvent(name: "checkInterval", value: 2 * 60 * 60 + 2 * 60, displayed: false, data: [protocol: "zigbee", hubHardwareId: device.hub.hardwareID])
+}
+
 
 def getTemperature(value) {
 	if (value != null) {
