@@ -17,26 +17,28 @@ import physicalgraph.zigbee.zcl.DataType
 
 metadata {
 	definition (name: "Centralite Zigbee Thermostat 3156105", namespace: "RGASoft", author: "Richard Gareau", ocfDeviceType: "oic.d.thermostat") {
-		capability "Battery"
+        capability "Actuator"
         capability "Temperature Measurement"
+        capability "Thermostat"
+        capability "Thermostat Mode"
+        capability "Thermostat Operating State"
 		capability "Thermostat Heating Setpoint"
         capability "Thermostat Cooling Setpoint"
         capability "Thermostat Fan Mode"
-        capability "Thermostat Mode"
-        capability "Thermostat Operating State"
         capability "Configuration"
+        capability "Battery"
         capability "Health Check"
         capability "Refresh"
-        capability "Actuator"
         capability "Sensor"
         
         fingerprint profileId: "0104", inClusters: "0000 0001 0003 0004 0009 0201 0202 0204", outClusters: "000A, 0019", manufacturer: "CentraLite Systems", model: "3156105", deviceJoinName: "Centralite Thermostat 3156105"
 	}
 
-/*
+
 	simulator {
 		// TODO: define status and reply messages here
-        log.debug "Simulator method called"
+        /*
+		log.debug "Simulator method called"
         
         
         status "system mode off":  "read attr - raw: 7AF81902010A0000293408, dni: 7AF8, endpoint: 19, cluster: 0201, size: 10, attrId: 001C, encoding: 20, value: 00"
@@ -47,8 +49,9 @@ metadata {
         
         
         reply "system mode off": "catchall: 0104 0201 01 01 0000 00 A6BA 01 01 106A 22 01 01000000"
+        */
 	}
-*/
+
 
 	tiles(scale: 2) {
     	multiAttributeTile(name:"thermostatMulti", type:"thermostat", width:6, height:4, canChangeIcon: true) {
